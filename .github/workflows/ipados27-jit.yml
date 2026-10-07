@@ -6,13 +6,15 @@ on:
     branches:
       - feat/ipados27-jit
     paths:
-      - 'patches/qemu-10.0.12-utm.patch'
+      - 'scripts/build_dependencies.sh'
+      - 'patches/**'
+      - 'JIT/**'
       - '.github/workflows/ipados27-jit.yml'
 
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,20 +23,41 @@ jobs:
       - name: Select Xcode
         shell: bash
         run: |
+          set -euo pipefail
           if [ -d /Applications/Xcode_26.0.app ]; then
             sudo xcode-select -s /Applications/Xcode_26.0.app
           fi
           xcodebuild -version
 
       - name: Install build requirements
+        shell: bash
         run: |
-          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm libclc spirv-llvm-translator libxcb libxrandr ldid dpkg
-          python3 -m pip install --break-system-packages --user six pyparsing pyyaml setuptools distlib mako || true
+          set -euo pipefail
+          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm spirv-llvm-translator libxcb libxrandr ldid dpkg
+          python3 -m pip install --break-system-packages --user six pyparsing pyyaml setuptools distlib mako
           echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/bison/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix llvm)/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix libclc);$(brew --prefix llvm)" >> "$GITHUB_ENV"
-          echo "LLVM_CONFIG=$(brew --prefix llvm)/bin/llvm-config" >> "$GITHUB_ENV"
+
+      - name: Build Mesa-compatible libclc
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIBCLC_VERSION="22.1.8.3"
+          ARCHIVE="$RUNNER_TEMP/mesa-libclc.tar.bz2"
+          SRC="$RUNNER_TEMP/mesa-libclc-$LIBCLC_VERSION"
+          PREFIX="$RUNNER_TEMP/mesa-libclc-prefix"
+
+          curl -fL --retry 3             "https://gitlab.freedesktop.org/karolherbst/mesa-libclc/-/archive/$LIBCLC_VERSION/mesa-libclc-$LIBCLC_VERSION.tar.bz2"             -o "$ARCHIVE"
+          echo "ff6c01fb68c4b885e13400c50298ee6a8bfcf3ac5995cf3039565f6814095226  $ARCHIVE" | shasum -a 256 -c -
+
+          tar -xjf "$ARCHIVE" -C "$RUNNER_TEMP"
+          cmake -S "$SRC" -B "$SRC/build"             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$PREFIX"
+          cmake --build "$SRC/build" --parallel 3
+          cmake --install "$SRC/build"
+
+          test -f "$PREFIX/share/pkgconfig/libclc.pc"
+          PKG_CONFIG_PATH="$PREFIX/share/pkgconfig" pkg-config --modversion libclc
+          echo "MESA_LIBCLC_PREFIX=$PREFIX" >> "$GITHUB_ENV"
 
       - name: Build iOS JIT sysroot
         env:
@@ -45,13 +68,16 @@ jobs:
         run: ./scripts/build_utm.sh -k iphoneos -s iOS -a arm64 -o UTM
 
       - name: Package unsigned JIT IPA
+        shell: bash
         run: |
+          set -euo pipefail
           ./scripts/package.sh ipa UTM.xcarchive .
           mv UTM.ipa UTM-5.0.5-iPadOS27-JIT.ipa
 
-      - name: Verify IPA
+      - name: Verify IPA and JIT contract
         shell: bash
         run: |
+          set -euo pipefail
           rm -rf verify
           mkdir verify
           unzip -q UTM-5.0.5-iPadOS27-JIT.ipa -d verify
@@ -62,9 +88,28 @@ jobs:
           grep -q 'get-task-allow' entitlements.txt
           grep -q 'dynamic-codesigning' entitlements.txt
 
-      - name: Upload IPA
+          # UTM 5.0.5/QEMU uses the legacy iOS 26+ BRK 0x69 preparation hook.
+          grep -q 'brk #0x69' build-iOS-arm64/qemu-10.0.12-utm/tcg/region.c
+          test -s JIT/utm-ipados27.js
+
+      - name: Create complete JIT kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf UTM-iPadOS27-JIT-Kit
+          mkdir UTM-iPadOS27-JIT-Kit
+          cp UTM-5.0.5-iPadOS27-JIT.ipa UTM-iPadOS27-JIT-Kit/
+          cp JIT/utm-ipados27.js UTM-iPadOS27-JIT-Kit/
+          cp JIT/README.md UTM-iPadOS27-JIT-Kit/
+          ditto -c -k --sequesterRsrc --keepParent UTM-iPadOS27-JIT-Kit UTM-5.0.5-iPadOS27-JIT-Kit.zip
+
+      - name: Upload complete kit
         uses: actions/upload-artifact@v4
         with:
-          name: UTM-5.0.5-iPadOS27-JIT
-          path: UTM-5.0.5-iPadOS27-JIT.ipa
+          name: UTM-5.0.5-iPadOS27-JIT-Kit
+          path: |
+            UTM-5.0.5-iPadOS27-JIT.ipa
+            UTM-5.0.5-iPadOS27-JIT-Kit.zip
+            JIT/utm-ipados27.js
+            JIT/README.md
           if-no-files-found: error

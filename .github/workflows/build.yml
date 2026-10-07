@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - '**'
+      - '!feat/ipados27-jit'
     tags-ignore:
       - '**'
     paths-ignore:

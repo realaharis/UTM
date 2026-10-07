@@ -32,6 +32,9 @@ jobs:
           python3 -m pip install --break-system-packages --user six pyparsing pyyaml setuptools distlib mako || true
           echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/bison/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$(brew --prefix libclc)/lib/pkgconfig:$(brew --prefix llvm)/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix libclc);$(brew --prefix llvm)" >> "$GITHUB_ENV"
+          echo "LLVM_CONFIG=$(brew --prefix llvm)/bin/llvm-config" >> "$GITHUB_ENV"
 
       - name: Build iOS JIT sysroot
         env:

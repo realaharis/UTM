@@ -28,7 +28,7 @@ jobs:
 
       - name: Install build requirements
         run: |
-          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm spirv-llvm-translator libxcb libxrandr ldid dpkg
+          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm libclc spirv-llvm-translator libxcb libxrandr ldid dpkg
           python3 -m pip install --break-system-packages --user six pyparsing pyyaml setuptools distlib mako || true
           echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/bison/bin" >> "$GITHUB_PATH"

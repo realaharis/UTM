@@ -855,10 +855,26 @@ build_mesa_host () {
     pushd "$BUILD_DIR/mesa.git"
 
     HOST_PATH="$(brew --prefix llvm)/bin:$CLEAN_PATH"
-    env -i PATH="$HOST_PATH" meson host_build --prefix="$PREFIX/host" --buildtype=release \
+    HOST_LIBCLC_PKGCONFIG="${MESA_LIBCLC_PREFIX:+$MESA_LIBCLC_PREFIX/share/pkgconfig}"
+    HOST_LIBCLC_CMAKE="${MESA_LIBCLC_PREFIX:-}"
+    HOST_LLVM_CONFIG="$(brew --prefix llvm)/bin/llvm-config"
+
+    env -i PATH="$HOST_PATH" \
+        PKG_CONFIG_PATH="$HOST_LIBCLC_PKGCONFIG" \
+        CMAKE_PREFIX_PATH="$HOST_LIBCLC_CMAKE" \
+        LLVM_CONFIG="$HOST_LLVM_CONFIG" \
+        meson host_build --prefix="$PREFIX/host" --buildtype=release \
         -Dllvm=enabled -Dstrip=true -Dopengl=false -Dgallium-drivers= -Dvulkan-drivers= -Dmesa-clc=enabled -Dinstall-mesa-clc=true
-    env -i PATH="$HOST_PATH" meson compile -C host_build -j $NCPU
-    env -i PATH="$HOST_PATH" meson install -C host_build
+    env -i PATH="$HOST_PATH" \
+        PKG_CONFIG_PATH="$HOST_LIBCLC_PKGCONFIG" \
+        CMAKE_PREFIX_PATH="$HOST_LIBCLC_CMAKE" \
+        LLVM_CONFIG="$HOST_LLVM_CONFIG" \
+        meson compile -C host_build -j $NCPU
+    env -i PATH="$HOST_PATH" \
+        PKG_CONFIG_PATH="$HOST_LIBCLC_PKGCONFIG" \
+        CMAKE_PREFIX_PATH="$HOST_LIBCLC_CMAKE" \
+        LLVM_CONFIG="$HOST_LLVM_CONFIG" \
+        meson install -C host_build
 
     popd
 }

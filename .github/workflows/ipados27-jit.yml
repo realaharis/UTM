@@ -15,8 +15,10 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 240
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -38,31 +40,58 @@ jobs:
           echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/bison/bin" >> "$GITHUB_PATH"
 
-      - name: Build Mesa-compatible libclc
+      - name: Install Mesa-compatible libclc payload
         shell: bash
         run: |
           set -euo pipefail
-          LIBCLC_VERSION="22.1.8.3"
-          ARCHIVE="$RUNNER_TEMP/mesa-libclc.tar.bz2"
-          SRC="$RUNNER_TEMP/mesa-libclc-$LIBCLC_VERSION"
-          PREFIX="$RUNNER_TEMP/mesa-libclc-prefix"
+          VERSION="22.1.8.3"
+          BASE="https://gitlab.freedesktop.org/api/v4/projects/27606/packages/generic/mesa-libclc/$VERSION"
+          PREFIX="$RUNNER_TEMP/mesa-libclc"
 
-          curl -fL --retry 3             "https://gitlab.freedesktop.org/karolherbst/mesa-libclc/-/archive/$LIBCLC_VERSION/mesa-libclc-$LIBCLC_VERSION.tar.bz2"             -o "$ARCHIVE"
-          echo "ff6c01fb68c4b885e13400c50298ee6a8bfcf3ac5995cf3039565f6814095226  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$PREFIX/libclc" "$PREFIX/share/pkgconfig" "$PREFIX/include"
 
-          tar -xjf "$ARCHIVE" -C "$RUNNER_TEMP"
-          cmake -S "$SRC" -B "$SRC/build"             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_INSTALL_PREFIX="$PREFIX"
-          cmake --build "$SRC/build" --parallel 3
-          cmake --install "$SRC/build"
+          curl -fL --retry 5 --retry-delay 3 "$BASE/spirv-mesa3d-.spv" -o "$PREFIX/libclc/spirv-mesa3d-.spv"
+          curl -fL --retry 5 --retry-delay 3 "$BASE/spirv64-mesa3d-.spv" -o "$PREFIX/libclc/spirv64-mesa3d-.spv"
 
-          test -f "$PREFIX/share/pkgconfig/libclc.pc"
-          PKG_CONFIG_PATH="$PREFIX/share/pkgconfig" pkg-config --modversion libclc
+          test -s "$PREFIX/libclc/spirv-mesa3d-.spv"
+          test -s "$PREFIX/libclc/spirv64-mesa3d-.spv"
+
+          cat > "$PREFIX/share/pkgconfig/libclc.pc" <<EOF
+          includedir=$PREFIX/include
+          libexecdir=$PREFIX/libclc
+
+          Name: libclc
+          Description: Mesa-compatible OpenCL C library payload
+          Version: $VERSION
+          Cflags: -I\${includedir}
+          Libs: -L\${libexecdir}
+          EOF
+
+          PKG_CONFIG_PATH="$PREFIX/share/pkgconfig" pkg-config --exists libclc
+          test "$(PKG_CONFIG_PATH="$PREFIX/share/pkgconfig" pkg-config --variable=libexecdir libclc)" = "$PREFIX/libclc"
           echo "MESA_LIBCLC_PREFIX=$PREFIX" >> "$GITHUB_ENV"
 
+      - name: Cache iOS sysroot
+        id: cache-sysroot
+        uses: actions/cache@v4
+        with:
+          path: sysroot-iOS-arm64
+          key: ipados27-jit-ios-arm64-${{ hashFiles('scripts/build_dependencies.sh', 'patches/**') }}-libclc-22.1.8.3
+
       - name: Build iOS JIT sysroot
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
         env:
           NCPU: 0
         run: ./scripts/build_dependencies.sh -p ios -a arm64
+
+      - name: Validate sysroot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d sysroot-iOS-arm64
+          test -d sysroot-iOS-arm64/Frameworks
+          test -x sysroot-iOS-arm64/host/bin/mesa_clc
+          test -x sysroot-iOS-arm64/host/bin/vtn_bindgen2
 
       - name: Build UTM archive
         run: ./scripts/build_utm.sh -k iphoneos -s iOS -a arm64 -o UTM
@@ -73,6 +102,7 @@ jobs:
           set -euo pipefail
           ./scripts/package.sh ipa UTM.xcarchive .
           mv UTM.ipa UTM-5.0.5-iPadOS27-JIT.ipa
+          test -s UTM-5.0.5-iPadOS27-JIT.ipa
 
       - name: Verify IPA and JIT contract
         shell: bash
@@ -81,16 +111,21 @@ jobs:
           rm -rf verify
           mkdir verify
           unzip -q UTM-5.0.5-iPadOS27-JIT.ipa -d verify
+
           APP="$(find verify/Payload -maxdepth 1 -name '*.app' -type d | head -1)"
           test -n "$APP"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
-          codesign -d --entitlements :- "$APP" 2>&1 | tee entitlements.txt || true
-          grep -q 'get-task-allow' entitlements.txt
-          grep -q 'dynamic-codesigning' entitlements.txt
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
+          echo "Bundle ID: $BUNDLE_ID"
+          test -x "$APP/$EXECUTABLE"
 
-          # UTM 5.0.5/QEMU uses the legacy iOS 26+ BRK 0x69 preparation hook.
+          ldid -e "$APP/$EXECUTABLE" > entitlements.plist
+          plutil -p entitlements.plist
+          grep -q 'get-task-allow' entitlements.plist
+          grep -q 'dynamic-codesigning' entitlements.plist
+
           grep -q 'brk #0x69' build-iOS-arm64/qemu-10.0.12-utm/tcg/region.c
-          test -s JIT/utm-ipados27.js
+          grep -q 'EXPECTED_BRK = 0x69' JIT/utm-ipados27.js
 
       - name: Create complete JIT kit
         shell: bash

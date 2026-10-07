@@ -1,0 +1,67 @@
+name: iPadOS 27 JIT IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/ipados27-jit
+    paths:
+      - 'patches/qemu-10.0.12-utm.patch'
+      - '.github/workflows/ipados27-jit.yml'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        shell: bash
+        run: |
+          if [ -d /Applications/Xcode_26.0.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.0.app
+          fi
+          xcodebuild -version
+
+      - name: Install build requirements
+        run: |
+          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm spirv-llvm-translator libxcb libxrandr ldid dpkg
+          python3 -m pip install --break-system-packages --user six pyparsing pyyaml setuptools distlib mako || true
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/opt/bison/bin" >> "$GITHUB_PATH"
+
+      - name: Build iOS JIT sysroot
+        env:
+          NCPU: 0
+        run: ./scripts/build_dependencies.sh -p ios -a arm64
+
+      - name: Build UTM archive
+        run: ./scripts/build_utm.sh -k iphoneos -s iOS -a arm64 -o UTM
+
+      - name: Package unsigned JIT IPA
+        run: |
+          ./scripts/package.sh ipa UTM.xcarchive .
+          mv UTM.ipa UTM-5.0.5-iPadOS27-JIT.ipa
+
+      - name: Verify IPA
+        shell: bash
+        run: |
+          rm -rf verify
+          mkdir verify
+          unzip -q UTM-5.0.5-iPadOS27-JIT.ipa -d verify
+          APP="$(find verify/Payload -maxdepth 1 -name '*.app' -type d | head -1)"
+          test -n "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          codesign -d --entitlements :- "$APP" 2>&1 | tee entitlements.txt || true
+          grep -q 'get-task-allow' entitlements.txt
+          grep -q 'dynamic-codesigning' entitlements.txt
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: UTM-5.0.5-iPadOS27-JIT
+          path: UTM-5.0.5-iPadOS27-JIT.ipa
+          if-no-files-found: error

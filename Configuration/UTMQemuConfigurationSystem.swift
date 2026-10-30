@@ -42,8 +42,23 @@ struct UTMQemuConfigurationSystem: Codable {
     /// The RAM of the guest in MiB.
     var memorySize: Int = 512
     
-    /// The JIT cache (code cache) in MiB.
+    /// The JIT cache (code cache) in MiB. Zero means automatic.
     var jitCacheSize: Int = 0
+
+    /// Effective TCG cache. The iOS x86 default is deliberately capped because
+    /// non-entitled split-W^X JIT can count the cache twice against the process limit.
+    /// An explicit cache size is always respected.
+    var effectiveJitCacheSize: Int {
+        if jitCacheSize > 0 {
+            return jitCacheSize
+        }
+        #if os(iOS)
+        if architecture == .x86_64 || architecture == .i386 {
+            return min(64, max(16, memorySize / 4))
+        }
+        #endif
+        return max(1, memorySize / 4)
+    }
     
     enum CodingKeys: String, CodingKey {
         case architecture = "Architecture"

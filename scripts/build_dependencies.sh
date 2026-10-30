@@ -869,10 +869,19 @@ build_mesa_host () {
     pushd "$BUILD_DIR/mesa.git"
 
     HOST_PATH="$(brew --prefix llvm)/bin:$CLEAN_PATH"
-    env -i PATH="$HOST_PATH" meson host_build --prefix="$PREFIX/host" --buildtype=release \
+    # Mesa's host CLC compiler needs static SPIRV-Tools on macOS.
+    # The env -i calls below otherwise discard pkg-config paths exported by CI.
+    MESA_HOST_PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+    if [ -n "${MESA_HOST_SPIRV_TOOLS_PREFIX:-}" ]; then
+        MESA_HOST_PKG_CONFIG_PATH="$MESA_HOST_SPIRV_TOOLS_PREFIX/lib/pkgconfig${MESA_HOST_PKG_CONFIG_PATH:+:$MESA_HOST_PKG_CONFIG_PATH}"
+    fi
+    if [ -z "$MESA_HOST_PKG_CONFIG_PATH" ]; then
+        echo "Warning: host Mesa has no extra pkg-config search directory for SPIRV-Tools"
+    fi
+    env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$MESA_HOST_PKG_CONFIG_PATH" meson host_build --prefix="$PREFIX/host" --buildtype=release \
         -Dllvm=enabled -Dstrip=true -Dopengl=false -Dgallium-drivers= -Dvulkan-drivers=kosmickrisp -Dplatforms=macos -Dmesa-clc=enabled -Dinstall-mesa-clc=true -Dprecomp-compiler=enabled -Dinstall-precomp-compiler=true
-    env -i PATH="$HOST_PATH" meson compile -C host_build -j $NCPU
-    env -i PATH="$HOST_PATH" meson install -C host_build
+    env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$MESA_HOST_PKG_CONFIG_PATH" meson compile -C host_build -j $NCPU
+    env -i PATH="$HOST_PATH" PKG_CONFIG_PATH="$MESA_HOST_PKG_CONFIG_PATH" meson install -C host_build
 
     popd
 }

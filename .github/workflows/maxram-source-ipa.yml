@@ -1,0 +1,128 @@
+name: UTM MaxRAM source IPA
+
+on:
+  push:
+    branches:
+      - feat/maxram-8c-4g-jit64
+    paths:
+      - .github/workflows/maxram-source-ipa.yml
+      - Configuration/**
+      - Platform/Shared/VMConfigSystemView.swift
+      - scripts/livecontainer_ipa.py
+      - tests/maxram_smoke.py
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/maxram-source-ipa.yml
+      - Configuration/**
+      - Platform/Shared/VMConfigSystemView.swift
+      - scripts/livecontainer_ipa.py
+      - tests/maxram_smoke.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maxram-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-checks:
+    name: Check MaxRAM source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source changes
+        run: |
+          python3 tests/maxram_smoke.py
+          python3 -m py_compile scripts/livecontainer_ipa.py
+
+  build-ipa:
+    name: Build and package modified UTM for LiveContainer
+    needs: source-checks
+    runs-on: macos-26
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Xcode diagnostics
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Restore iOS ARM64 sysroot cache
+        id: sysroot-cache
+        uses: actions/cache@v4
+        with:
+          path: sysroot-ios-arm64
+          key: maxram-ios-arm64-${{ runner.os }}-${{ hashFiles('scripts/build_dependencies.sh', 'scripts/fixup.sh', 'patches/**') }}
+
+      - name: Install dependency build tools
+        if: steps.sysroot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm spirv-llvm-translator libxcb libxrandr
+          python3 -m pip install --user --break-system-packages six pyparsing pyyaml setuptools distlib mako
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix libgpg-error)/bin" >> "$GITHUB_PATH"
+
+      - name: Build iOS ARM64 QEMU dependencies
+        if: steps.sysroot-cache.outputs.cache-hit != 'true'
+        env:
+          NCPU: "3"
+        run: ./scripts/build_dependencies.sh -p ios -a arm64
+
+      - name: Verify sysroot
+        run: |
+          test -d sysroot-ios-arm64
+          test -n "$(find sysroot-ios-arm64 -type f -print -quit)"
+
+      - name: Build modified UTM app from this commit
+        run: ./scripts/build_utm.sh -k iphoneos -s iOS -a arm64 -o UTM
+
+      - name: Install IPA packaging tools
+        run: brew install ldid
+
+      - name: Package unsigned source-built UTM IPA
+        run: |
+          test -d UTM.xcarchive/Products/Applications/UTM.app
+          ./scripts/package.sh ipa UTM.xcarchive .
+          test -s UTM.ipa
+
+      - name: Remove iOS helper for LiveContainer
+        run: |
+          python3 scripts/livecontainer_ipa.py UTM.ipa UTM-MaxRAM-8C-4G-LiveContainer.ipa
+
+      - name: Verify final IPA
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          import zipfile
+
+          path = "UTM-MaxRAM-8C-4G-LiveContainer.ipa"
+          with zipfile.ZipFile(path) as z:
+              assert z.testzip() is None, "corrupt IPA"
+              names = z.namelist()
+              app = "Payload/UTM.app/"
+              assert app + "Info.plist" in names, "missing app Info.plist"
+              info = plistlib.loads(z.read(app + "Info.plist"))
+              binary = app + info["CFBundleExecutable"]
+              assert binary in names, "missing UTM executable"
+              assert z.read(binary)[:4] in (
+                  b"\\xcf\\xfa\\xed\\xfe", b"\\xca\\xfe\\xba\\xbe",
+                  b"\\xca\\xfe\\xba\\xbf", b"\\xfe\\xed\\xfa\\xcf",
+              ), "app executable is not Mach-O"
+              assert not any("/iOSHelper.appex/" in n or "/iOSHelper-SE.appex/" in n for n in names)
+              print("Validated source-built LiveContainer IPA; physical-device testing still required.")
+          PY
+
+      - name: Upload source-built IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: UTM-MaxRAM-8C-4G-LiveContainer
+          path: UTM-MaxRAM-8C-4G-LiveContainer.ipa
+          if-no-files-found: error
+          retention-days: 14

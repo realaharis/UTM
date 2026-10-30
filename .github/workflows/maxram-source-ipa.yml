@@ -40,17 +40,30 @@ jobs:
   build-ipa:
     name: Build and package modified UTM for LiveContainer
     needs: source-checks
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Xcode diagnostics
+      - name: Select supported Xcode for iOS 26 build
+        shell: bash
         run: |
+          set -euo pipefail
+          if [ -d /Applications/Xcode_26.3.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.3.app
+          elif [ -d /Applications/Xcode_26.2.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.2.app
+          else
+            echo "::error::Xcode 26.2 or 26.3 not found on macOS runner"
+            ls -d /Applications/Xcode* || true
+            exit 1
+          fi
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          df -h .
+
 
       - name: Restore iOS ARM64 sysroot cache
         id: sysroot-cache

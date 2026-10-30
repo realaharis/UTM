@@ -39,13 +39,15 @@ jobs:
 
   build-ipa:
     name: Build and package modified UTM for LiveContainer
-    needs: source-checks
     runs-on: macos-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Validate MaxRAM source on macOS
+        run: python3 tests/maxram_smoke.py
 
       - name: Select supported Xcode for iOS 26 build
         shell: bash

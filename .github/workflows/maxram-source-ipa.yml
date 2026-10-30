@@ -111,10 +111,9 @@ jobs:
               info = plistlib.loads(z.read(app + "Info.plist"))
               binary = app + info["CFBundleExecutable"]
               assert binary in names, "missing UTM executable"
-              assert z.read(binary)[:4] in (
-                  b"\\xcf\\xfa\\xed\\xfe", b"\\xca\\xfe\\xba\\xbe",
-                  b"\\xca\\xfe\\xba\\xbf", b"\\xfe\\xed\\xfa\\xcf",
-              ), "app executable is not Mach-O"
+              assert z.read(binary)[:4] in tuple(bytes.fromhex(x) for x in (
+                  "cffaedfe", "cafebabe", "cafebabf", "feedfacf"
+              )), "app executable is not Mach-O"
               assert not any("/iOSHelper.appex/" in n or "/iOSHelper-SE.appex/" in n for n in names)
               print("Validated source-built LiveContainer IPA; physical-device testing still required.")
           PY

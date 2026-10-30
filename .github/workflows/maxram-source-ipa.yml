@@ -9,6 +9,8 @@ on:
       - Configuration/**
       - Platform/Shared/VMConfigSystemView.swift
       - scripts/livecontainer_ipa.py
+      - scripts/build_dependencies.sh
+      - scripts/setup_mesa_spirv_tools.sh
       - tests/maxram_smoke.py
   workflow_dispatch:
   pull_request:
@@ -17,6 +19,8 @@ on:
       - Configuration/**
       - Platform/Shared/VMConfigSystemView.swift
       - scripts/livecontainer_ipa.py
+      - scripts/build_dependencies.sh
+      - scripts/setup_mesa_spirv_tools.sh
       - tests/maxram_smoke.py
 
 permissions:
@@ -72,17 +76,33 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sysroot-ios-arm64
-          key: maxram-ios-arm64-${{ runner.os }}-${{ hashFiles('scripts/build_dependencies.sh', 'scripts/fixup.sh', 'patches/**') }}
+          key: maxram-ios-arm64-${{ runner.os }}-${{ hashFiles('scripts/build_dependencies.sh', 'scripts/setup_mesa_spirv_tools.sh', 'scripts/fixup.sh', 'patches/**') }}
 
       - name: Install dependency build tools
         if: steps.sysroot-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm spirv-llvm-translator libxcb libxrandr
+          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson cmake llvm spirv-llvm-translator spirv-tools spirv-headers libxcb libxrandr
           python3 -m pip install --user --break-system-packages six pyparsing pyyaml setuptools distlib mako
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix gettext)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix libgpg-error)/bin" >> "$GITHUB_PATH"
+
+      - name: Build static SPIRV-Tools for host Mesa
+        if: steps.sysroot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/setup_mesa_spirv_tools.sh
+
+      - name: Preflight host Mesa SPIRV-Tools dependency
+        if: steps.sysroot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PKG_CONFIG_PATH="$MESA_HOST_SPIRV_TOOLS_PREFIX/lib/pkgconfig"
+          pkg-config --modversion SPIRV-Tools
+          pkg-config --print-errors --exists 'SPIRV-Tools >= 2024.1'
+          pkg-config --static --libs SPIRV-Tools
+          test -s "$MESA_HOST_SPIRV_TOOLS_PREFIX/lib/libSPIRV-Tools.a"
 
       - name: Build iOS ARM64 QEMU dependencies
         if: steps.sysroot-cache.outputs.cache-hit != 'true'

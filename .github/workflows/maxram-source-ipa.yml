@@ -40,7 +40,7 @@ jobs:
   build-ipa:
     name: Build and package modified UTM for LiveContainer
     needs: source-checks
-    runs-on: macos-15
+    runs-on: macos-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4

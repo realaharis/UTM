@@ -33,6 +33,22 @@ struct VMConfigSystemView: View {
         VStack {
             Form {
                 HardwareOptions(config: $config, architecture: $architecture, target: $target, warningMessage: $warningMessage)
+                #if os(iOS)
+                if config.architecture == .x86_64 {
+                    Section(header: Text("UTM MaxRAM (Experimental)")) {
+                        Button("Apply 8 vCPU / 4 GiB RAM / 64 MiB JIT") {
+                            config.cpuCount = 8
+                            config.isForceMulticore = true
+                            config.memorySize = 4096
+                            config.jitCacheSize = 64
+                            validateMemorySize(editing: false)
+                        }
+                        Text("8-core x86 emulation is experimental. iPadOS memory limits and other causes of black screens still apply.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                #endif
                 RAMSlider(systemMemory: $config.memorySize, onValidate: validateMemorySize)
                 Section(header: Text("CPU")) {
                     VMConfigConstantPicker(selection: $config.cpu, type: config.architecture.cpuType)
@@ -51,7 +67,7 @@ struct VMConfigSystemView: View {
                         Text("Force Multicore")
                     })
                 }
-                DetailedSection("JIT Cache", description: "Default is 1/4 of the RAM size (above). The JIT cache size is additive to the RAM size in the total memory usage!") {
+                DetailedSection("JIT Cache", description: "Automatic cache is capped at 64 MiB for x86 on iOS. On other systems it defaults to 1/4 of RAM. JIT cache memory is additive to guest RAM!") {
                     HStack {
                         NumberTextField("", number: $config.jitCacheSize, prompt: "Default", onEditingChanged: validateMemorySize)
                             .multilineTextAlignment(.trailing)
@@ -100,7 +116,7 @@ struct VMConfigSystemView: View {
             totalDeviceMemory = min(availableMemory, totalDeviceMemory)
         }
         #endif
-        let actualJitSizeMib = jitSizeMib == 0 ? memorySizeMib / 4 : jitSizeMib
+        let actualJitSizeMib = config.effectiveJitCacheSize
         let jitMirrorMultiplier = UTMCapabilities.current.contains(.hasJitEntitlements) ? 1 : 2;
         let estMemoryUsage = UInt64(memorySizeMib + jitMirrorMultiplier*actualJitSizeMib + baseUsageMib) * bytesInMib
         if Double(estMemoryUsage) > Double(totalDeviceMemory) * warningThreshold {
